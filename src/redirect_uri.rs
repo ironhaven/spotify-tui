@@ -1,13 +1,11 @@
 use rspotify::{oauth2::SpotifyOAuth, util::request_token};
 use std::{
   io::prelude::*,
-  net::{TcpListener, TcpStream},
+  net::{Ipv4Addr, TcpListener, TcpStream},
 };
 
 pub fn redirect_uri_web_server(spotify_oauth: &mut SpotifyOAuth, port: u16) -> Result<String, ()> {
-  let listener = TcpListener::bind(format!("127.0.0.1:{}", port));
-
-  match listener {
+  match TcpListener::bind((Ipv4Addr::LOCALHOST, port)) {
     Ok(listener) => {
       request_token(spotify_oauth);
 
@@ -35,20 +33,19 @@ pub fn redirect_uri_web_server(spotify_oauth: &mut SpotifyOAuth, port: u16) -> R
 fn handle_connection(mut stream: TcpStream) -> Option<String> {
   // The request will be quite large (> 512) so just assign plenty just in case
   let mut buffer = [0; 1000];
-  let _ = stream.read(&mut buffer).unwrap();
+  stream.read(&mut buffer).unwrap();
 
-  // convert buffer into string and 'parse' the URL
-  match String::from_utf8(buffer.to_vec()) {
-    Ok(request) => {
-      let split: Vec<&str> = request.split_whitespace().collect();
-
-      if split.len() > 1 {
+  // convert buffer into a str and 'parse' the 'URL' to get at the query paramaters
+  match std::str::from_utf8(&buffer) {
+    // index 0    1                 2            ....
+    //       GET /redirect?xxxxxxxx HTTP/1.1\r\n ....
+    Ok(request) => match request.split_whitespace().nth(1) {
+      Some(url) => {
         respond_with_success(stream);
-        return Some(split[1].to_string());
+        return Some(url.to_string());
       }
-
-      respond_with_error("Malformed request".to_string(), stream);
-    }
+      None => respond_with_error("Malformed request".to_string(), stream),
+    },
     Err(e) => {
       respond_with_error(format!("Invalid UTF-8 sequence: {}", e), stream);
     }
@@ -57,22 +54,19 @@ fn handle_connection(mut stream: TcpStream) -> Option<String> {
   None
 }
 
+
 fn respond_with_success(mut stream: TcpStream) {
   let contents = include_str!("redirect_uri.html");
 
-  let response = format!("HTTP/1.1 200 OK\r\n\r\n{}", contents);
-
-  stream.write_all(response.as_bytes()).unwrap();
-  stream.flush().unwrap();
+  write!(stream, "HTTP/1.1 200 OK\r\n\r\n{}", contents).unwrap();
 }
 
 fn respond_with_error(error_message: String, mut stream: TcpStream) {
   println!("Error: {}", error_message);
-  let response = format!(
+  write!(
+    stream,
     "HTTP/1.1 400 Bad Request\r\n\r\n400 - Bad Request - {}",
     error_message
-  );
-
-  stream.write_all(response.as_bytes()).unwrap();
-  stream.flush().unwrap();
+  )
+  .unwrap();
 }
